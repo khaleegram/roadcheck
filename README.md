@@ -1,36 +1,58 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Clearpath
 
-## Getting Started
+Amara is closing her shop at 6:40 PM. A cousin forwarded a voice note, a neighbour saw something, and the vigilante radio can reach a few people, not the street. By the time a story gets to her it is either too late or it is a rumour that empties the market for nothing.
 
-First, run the development server:
+Clearpath does one thing. She pastes what she just heard, picks the road home, and gets a single word: **Go**, **Wait**, or **Stay** — plus the reason, in a sentence she can read while she locks the shutter.
+
+## Why this
+
+The scarce thing is not another chat. It is a verified signal she can trust in the moment.
+
+The model reads messy language (a WhatsApp forward, a voice-note retelling) and turns it into a claim: what kind of message it is, and which road it is actually about. A short set of rules then decides, using a signal board of reports people filed this evening.
+
+The model is not allowed to confirm an incident. Confirmation is a status a person puts on the board. That split is the product:
+
+- One unchecked sighting means **wait**. It does not mean the street should run.
+- A cousin's retelling of that sighting is not a second witness.
+- A "the whole town is on fire" forward does not close a road a patrol already walked.
+- A neighbour saying a road "looks quiet" does not erase a report the night chair already confirmed.
+
+Kasuwa, the board, and the clock are a fictional evening so the prototype can be judged on the decision, not on a live feed.
+
+## Try it
+
+Three messages are wired to the three answers:
+
+| Paste this | Road | Answer |
+| --- | --- | --- |
+| Cousin on WhatsApp | Market Road | Wait |
+| The town is on fire | River Path | Go |
+| Hill looks quiet | Hill Cut | Stay |
+
+## Setup
 
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000).
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+The check works without a model key. If the model cannot be reached, the same rules run on a rehearsal reading of the message, and the screen says so.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+To use the model locally, link a Vercel project that has AI Gateway access and pull its env, then restart:
 
-## Learn More
+```bash
+npx vercel link
+npx vercel env pull
+```
 
-To learn more about Next.js, take a look at the following resources:
+Optional: set `CLEARPATH_MODEL` (default `openai/gpt-5.4-mini`). Set `CLEARPATH_REHEARSAL=1` to force the rules-only path.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Deploy
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+The app is a Next.js App Router project. Import the repo in Vercel and deploy. AI Gateway authentication is provided on Vercel; no provider key belongs in the repo.
 
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+```bash
+npm run build
+```
