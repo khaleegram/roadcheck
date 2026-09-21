@@ -13,6 +13,7 @@ export type Extraction = {
   routes: Array<RouteId | "town">;
   specific: boolean;
   source: "model" | "rehearsal";
+  modelNote?: string;
 };
 
 export type Verdict = "go" | "wait" | "stay";

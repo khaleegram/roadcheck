@@ -36,6 +36,7 @@ export async function POST(request: Request) {
     decision,
     readBy: extraction.source,
     kind: extraction.kind,
+    modelNote: extraction.modelNote,
     board,
   });
 }
