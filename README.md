@@ -40,6 +40,8 @@ Open [http://localhost:3000](http://localhost:3000).
 
 The check works without a model key. If the model cannot be reached, the same rules run on a rehearsal reading of the message, and the screen says so.
 
+On Vercel, the model goes through AI Gateway. That gateway asks for a card on the account before it will spend the free credits. Add one in the Vercel AI settings, then reload — no new deploy. Until then, the three sample messages still return Wait, Go, and Stay.
+
 To use the model locally, link a Vercel project that has AI Gateway access and pull its env, then restart:
 
 ```bash

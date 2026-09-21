@@ -65,9 +65,6 @@ Only list a road if the message claims something happened there or that it was c
   } catch (error) {
     const detail = error instanceof Error ? error.message : "unknown error";
     console.error(`Clearpath model read failed, using rehearsal: ${detail}`);
-    return {
-      ...rehearse(message),
-      modelNote: detail.replace(/\s+/g, " ").slice(0, 240),
-    };
+    return rehearse(message);
   }
 }
