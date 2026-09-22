@@ -13,9 +13,9 @@ const fraunces = Fraunces({
 });
 
 export const metadata: Metadata = {
-  title: "Is the road home safe?",
+  title: "RoadCheck — trusted signal when minutes matter",
   description:
-    "Paste what has already reached her. Chains of the same story stay one witness. The road clears only when someone else was on it after the last claim.",
+    "AI-assisted, trust-calibrated road safety signal for communities facing too much noise and too little verified information.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

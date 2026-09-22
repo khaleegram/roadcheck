@@ -1,9 +1,5 @@
-import { Checker } from "@/components/checker";
+import { RoadCheckApp } from "@/components/roadcheck-app";
 
 export default function Home() {
-  return (
-    <main>
-      <Checker />
-    </main>
-  );
+  return <RoadCheckApp />;
 }
