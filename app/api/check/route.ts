@@ -1,41 +1,33 @@
-import { board, routes, type RouteId } from "@/lib/board";
-import { decide } from "@/lib/decide";
-import { readMessage } from "@/lib/read";
+import { judge, splitMessages } from "@/lib/graph";
+import { readMessages } from "@/lib/read";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
 
-const routeIds = new Set<string>(routes.map((route) => route.id));
-
 export async function POST(request: Request) {
-  let body: { message?: unknown; route?: unknown };
+  let body: { text?: unknown };
   try {
     body = await request.json();
   } catch {
-    return Response.json({ error: "Send a message and a road." }, { status: 400 });
+    return Response.json({ error: "Paste what reached you." }, { status: 400 });
   }
 
-  const message = typeof body.message === "string" ? body.message.trim() : "";
-  const route = typeof body.route === "string" ? body.route : "";
+  const text = typeof body.text === "string" ? body.text.trim() : "";
+  const messages = splitMessages(text);
 
-  if (message.length < 8 || message.length > 1200) {
+  if (messages.length === 0 || text.length > 4000) {
     return Response.json(
-      { error: "Paste the message you actually heard — a sentence is enough." },
+      { error: "Paste the messages that actually reached you." },
       { status: 400 },
     );
   }
 
-  if (!routeIds.has(route)) {
-    return Response.json({ error: "Pick the road you mean to walk." }, { status: 400 });
-  }
-
-  const extraction = await readMessage(message);
-  const decision = decide(route as RouteId, extraction);
+  const read = await readMessages(messages);
+  const roads = judge(read.claims);
 
   return Response.json({
-    decision,
-    readBy: extraction.source,
-    kind: extraction.kind,
-    board,
+    roads,
+    readBy: read.source,
+    claims: read.claims,
   });
 }

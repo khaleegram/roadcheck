@@ -13,9 +13,9 @@ const fraunces = Fraunces({
 });
 
 export const metadata: Metadata = {
-  title: "Clearpath — is the road home safe?",
+  title: "Is the road home safe?",
   description:
-    "A shopkeeper pastes what she just heard. Clearpath turns the rumour into one decision: go, wait, or stay.",
+    "Paste what has already reached her. Chains of the same story stay one witness. The road clears only when someone else was on it after the last claim.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
