@@ -101,6 +101,7 @@ export function RoadCheckApp({
   const [reports, setReports] = useState<Report[]>([]);
   const [sources, setSources] = useState<Source[]>([]);
   const [loaded, setLoaded] = useState(false);
+  const [now, setNow] = useState(0);
   const [screen, setScreen] = useState<Screen>(initialRoadId ? "road" : "home");
   const [query, setQuery] = useState("");
   const [handle, setHandle] = useState("");
@@ -130,7 +131,9 @@ export function RoadCheckApp({
       locations: Location[];
       reports: Report[];
       sources: Source[];
+      now: number;
     };
+    setNow(data.now);
     setLocations(data.locations);
     setReports(data.reports);
     setSources(data.sources);
@@ -158,11 +161,11 @@ export function RoadCheckApp({
     );
   }, [initialRoadId, initialRoadName, locations]);
 
-  const belief = road ? calculateRoadBelief(road, reports, sources) : null;
+  const belief = road ? calculateRoadBelief(road, reports, sources, now) : null;
   const roadReports = road
     ? reports
         .filter((report) => report.claim.locationId === road.id)
-        .sort((a, b) => minutesSince(a.occurredAt) - minutesSince(b.occurredAt))
+        .sort((a, b) => minutesSince(a.occurredAt, now) - minutesSince(b.occurredAt, now))
     : [];
   const whyKey = belief
     ? `${belief.locationId}:${belief.verdict}:${roadReports.map((r) => `${r.id}${r.status}`).join(",")}`
@@ -198,16 +201,16 @@ export function RoadCheckApp({
   const watched = useMemo(() => {
     return locations
       .map((location) => {
-        const b = calculateRoadBelief(location, reports, sources);
+        const b = calculateRoadBelief(location, reports, sources, now);
         const latest = reports
           .filter((report) => report.claim.locationId === location.id)
-          .map((report) => minutesSince(report.occurredAt))
+          .map((report) => minutesSince(report.occurredAt, now))
           .sort((a, b) => a - b)[0];
         return { location, belief: b, latest: latest ?? Infinity };
       })
       .filter((item) => Number.isFinite(item.latest))
       .sort((a, b) => a.latest - b.latest);
-  }, [locations, reports, sources]);
+  }, [locations, reports, sources, now]);
 
   function goToRoad(location: { id: string; name: string }) {
     router.push(`/road/${location.id}?name=${encodeURIComponent(location.name)}`);
@@ -345,7 +348,7 @@ export function RoadCheckApp({
 
   const look = belief ? verdictLook[belief.verdict] : null;
   const latestMinutes = roadReports.length
-    ? minutesSince(roadReports[0].occurredAt)
+    ? minutesSince(roadReports[0].occurredAt, now)
     : null;
 
   return (
@@ -529,7 +532,7 @@ export function RoadCheckApp({
                           <span className="font-medium text-[var(--ink)]">
                             {source?.name ?? "Someone"}
                           </span>
-                          <span>{timeAgo(minutesSince(report.occurredAt))}</span>
+                          <span>{timeAgo(minutesSince(report.occurredAt, now))}</span>
                         </div>
                         <p className="mt-2 leading-relaxed">
                           {report.claim.whatWasSeen || report.claim.description}

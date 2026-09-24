@@ -4,5 +4,5 @@ export const runtime = "nodejs";
 
 export async function GET() {
   const store = await getStore();
-  return Response.json(store);
+  return Response.json({ ...store, now: Date.now() });
 }
