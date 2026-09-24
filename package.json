@@ -7,9 +7,14 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test:engine": "tsx scripts/engine-check.ts"
+    "test:engine": "tsx scripts/engine-check.ts",
+    "test:ai": "node --env-file-if-exists=.env.local --import tsx scripts/ai-check.ts",
+    "seed": "node --env-file-if-exists=.env.local --import tsx scripts/seed.ts",
+    "ai:status": "curl -sf http://127.0.0.1:3000/api/status"
   },
   "dependencies": {
+    "@ai-sdk/cerebras": "^3.0.55",
+    "@ai-sdk/groq": "^4.0.48",
     "ai": "^7.0.107",
     "next": "16.3.5",
     "react": "19.2.8",

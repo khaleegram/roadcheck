@@ -1,184 +1,235 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  assignCluster,
   calculateRoadBelief,
-  initialReports,
-  initialSources,
-  percent,
-  roadName,
-  roads,
-  sourceReliability,
-  updateSourceOutcome,
+  findLocation,
+  locationIdFromName,
+  minutesSince,
+  type EpistemicStatus,
   type ExtractedClaim,
+  type Location,
   type Report,
   type RoadBelief,
-  type RoadId,
   type Source,
 } from "@/lib/roadcheck";
 
-type Tab = "monitor" | "report" | "sources";
+type Screen = "home" | "road" | "share" | "people";
 type ReadBy = "model" | "rules";
+type Turn = { question: string; answer: string };
 
 type AnalysisResponse =
-  | {
-      needsFollowUp: true;
-      question: string;
-      readBy: ReadBy;
-    }
+  | { needsFollowUp: true; question: string; readBy: ReadBy; aiNote?: string | null }
   | {
       needsFollowUp: false;
       claim: ExtractedClaim;
+      placeIsBusy: boolean;
       readBy: ReadBy;
+      aiNote?: string | null;
     };
 
-const demoReports = [
-  {
-    label: "Vague WhatsApp warning",
-    value: "People are saying something is happening near the market. Be careful.",
-  },
-  {
-    label: "Another copy of the voice note",
-    value:
-      "Forwarded message: the voice note says armed men are at the north junction on Market Road, about 25 minutes ago.",
-  },
-  {
-    label: "Credible contradiction",
-    value:
-      "I drove the full length of Market Road myself two minutes ago. The junction and the road were clear.",
-  },
-];
+type DevEvent = { at: number; job: string; readBy: ReadBy; note: string | null };
 
-const verdictStyle: Record<
+const verdictLook: Record<
   RoadBelief["verdict"],
-  { text: string; wash: string; ring: string }
+  { headline: string; short: string; bg: string; color: string }
 > = {
   "looks-clear": {
-    text: "text-[#176346]",
-    wash: "bg-[#e6f2eb]",
-    ring: "#237a58",
+    headline: "Probably fine",
+    short: "Looks fine",
+    bg: "var(--ok-bg)",
+    color: "var(--ok)",
   },
   unconfirmed: {
-    text: "text-[#6c6258]",
-    wash: "bg-[#eee8df]",
-    ring: "#8a7a68",
+    headline: "Nobody knows yet",
+    short: "Unclear",
+    bg: "var(--unknown-bg)",
+    color: "var(--muted)",
   },
   caution: {
-    text: "text-[#8a5a12]",
-    wash: "bg-[#f8efd8]",
-    ring: "#b8791d",
+    headline: "Be careful",
+    short: "Be careful",
+    bg: "var(--wait-bg)",
+    color: "var(--wait)",
   },
   avoid: {
-    text: "text-[#8d312c]",
-    wash: "bg-[#f7e5e2]",
-    ring: "#a84037",
+    headline: "Don't go that way",
+    short: "Avoid",
+    bg: "var(--bad-bg)",
+    color: "var(--bad)",
   },
 };
 
-const eventLabel: Record<ExtractedClaim["eventType"], string> = {
-  armed_people: "Armed people",
-  road_block: "Road block",
-  movement: "Movement",
-  violence: "Violence",
-  all_clear: "All clear",
-  unknown: "Unspecified",
+const howTheyKnow: Record<EpistemicStatus, string> = {
+  firsthand: "Saw it themselves",
+  secondhand: "Heard it from someone",
+  thirdhand: "Forwarded message",
+  unknown: "Not sure how they know",
 };
 
-function Gauge({ belief }: { belief: RoadBelief }) {
-  const style = verdictStyle[belief.verdict];
-  const degrees = Math.round(belief.probability * 360);
-  return (
-    <div
-      className="grid h-16 w-16 shrink-0 place-items-center rounded-full"
-      style={{
-        background: `conic-gradient(${style.ring} ${degrees}deg, rgba(28,22,18,.09) ${degrees}deg)`,
-      }}
-    >
-      <div className="grid h-12 w-12 place-items-center rounded-full bg-[var(--paper)] text-xs font-bold">
-        {percent(belief.probability)}
-      </div>
-    </div>
-  );
+const POLL_MS = 20_000;
+const IS_DEV = process.env.NODE_ENV === "development";
+
+function timeAgo(minutes: number) {
+  const m = Math.round(minutes);
+  if (m < 2) return "just now";
+  if (m < 60) return `${m} min ago`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h} hr${h === 1 ? "" : "s"} ago`;
+  const d = Math.round(h / 24);
+  return `${d} day${d === 1 ? "" : "s"} ago`;
 }
 
-function Badge({
-  children,
-  tone = "neutral",
+function titleFromId(id: string) {
+  return id
+    .split("-")
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
+}
+
+export function RoadCheckApp({
+  initialRoadId,
+  initialRoadName,
 }: {
-  children: React.ReactNode;
-  tone?: "neutral" | "danger" | "safe" | "warn";
+  initialRoadId?: string;
+  initialRoadName?: string;
 }) {
-  const classes = {
-    neutral: "bg-[#ede6dc] text-[#685e54]",
-    danger: "bg-[#f4dedb] text-[#87352f]",
-    safe: "bg-[#deeee5] text-[#176346]",
-    warn: "bg-[#f5ead0] text-[#7a5015]",
-  };
-  return (
-    <span
-      className={`inline-flex rounded-full px-2.5 py-1 text-[11px] font-semibold ${classes[tone]}`}
-    >
-      {children}
-    </span>
-  );
-}
-
-export function RoadCheckApp() {
-  const [reports, setReports] = useState<Report[]>(initialReports);
-  const [sources, setSources] = useState<Source[]>(initialSources);
-  const [selectedRoad, setSelectedRoad] = useState<RoadId>("market-road");
-  const [tab, setTab] = useState<Tab>("monitor");
-  const [rawText, setRawText] = useState(demoReports[0].value);
-  const [followUp, setFollowUp] = useState<string | null>(null);
+  const router = useRouter();
+  const [locations, setLocations] = useState<Location[]>([]);
+  const [reports, setReports] = useState<Report[]>([]);
+  const [sources, setSources] = useState<Source[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  const [screen, setScreen] = useState<Screen>(initialRoadId ? "road" : "home");
+  const [query, setQuery] = useState("");
+  const [handle, setHandle] = useState("");
+  const [rawText, setRawText] = useState("");
+  const [turns, setTurns] = useState<Turn[]>([]);
+  const [question, setQuestion] = useState<string | null>(null);
   const [answer, setAnswer] = useState("");
-  const [pendingClaim, setPendingClaim] = useState<ExtractedClaim | null>(null);
-  const [readBy, setReadBy] = useState<ReadBy | null>(null);
+  const [pending, setPending] = useState<{
+    claim: ExtractedClaim;
+    placeIsBusy: boolean;
+  } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [why, setWhy] = useState<Record<string, string>>({});
+  const [voted, setVoted] = useState<Record<string, true>>({});
+  const [copied, setCopied] = useState(false);
+  const [devLog, setDevLog] = useState<DevEvent[]>([]);
 
-  useEffect(() => {
-    const saved = window.localStorage.getItem("roadcheck-session-v2");
-    if (!saved) return;
-    try {
-      const parsed = JSON.parse(saved) as {
-        reports: Report[];
-        sources: Source[];
-      };
-      if (parsed.reports?.length && parsed.sources?.length) {
-        queueMicrotask(() => {
-          setReports(parsed.reports);
-          setSources(parsed.sources);
-        });
-      }
-    } catch {
-      window.localStorage.removeItem("roadcheck-session-v2");
-    }
+  const logDev = useCallback((job: string, readBy: ReadBy, note?: string | null) => {
+    if (!IS_DEV) return;
+    setDevLog((log) => [{ at: Date.now(), job, readBy, note: note ?? null }, ...log].slice(0, 12));
+  }, []);
+
+  const refresh = useCallback(async () => {
+    const response = await fetch("/api/feed", { cache: "no-store" });
+    const data = (await response.json()) as {
+      locations: Location[];
+      reports: Report[];
+      sources: Source[];
+    };
+    setLocations(data.locations);
+    setReports(data.reports);
+    setSources(data.sources);
+    setLoaded(true);
   }, []);
 
   useEffect(() => {
-    window.localStorage.setItem(
-      "roadcheck-session-v2",
-      JSON.stringify({ reports, sources }),
+    queueMicrotask(() => {
+      void refresh().catch(() => setError("Couldn't load the latest reports. Check your connection."));
+    });
+    const timer = setInterval(() => {
+      if (document.visibilityState === "visible") void refresh().catch(() => {});
+    }, POLL_MS);
+    return () => clearInterval(timer);
+  }, [refresh]);
+
+  const road: Location | null = useMemo(() => {
+    if (!initialRoadId) return null;
+    return (
+      locations.find((item) => item.id === initialRoadId) ?? {
+        id: initialRoadId,
+        name: initialRoadName?.trim() || titleFromId(initialRoadId),
+        busy: true,
+      }
     );
-  }, [reports, sources]);
+  }, [initialRoadId, initialRoadName, locations]);
 
-  const beliefs = useMemo(
-    () =>
-      Object.fromEntries(
-        roads.map((road) => [
-          road.id,
-          calculateRoadBelief(road.id, reports, sources),
-        ]),
-      ) as Record<RoadId, RoadBelief>,
-    [reports, sources],
-  );
-  const selected = beliefs[selectedRoad];
-  const selectedReports = reports
-    .filter((report) => report.claim.roadId === selectedRoad)
-    .sort((a, b) => a.claim.minutesAgo - b.claim.minutesAgo);
+  const belief = road ? calculateRoadBelief(road, reports, sources) : null;
+  const roadReports = road
+    ? reports
+        .filter((report) => report.claim.locationId === road.id)
+        .sort((a, b) => minutesSince(a.occurredAt) - minutesSince(b.occurredAt))
+    : [];
+  const whyKey = belief
+    ? `${belief.locationId}:${belief.verdict}:${roadReports.map((r) => `${r.id}${r.status}`).join(",")}`
+    : "";
 
-  async function analyze(withAnswer = false) {
+  useEffect(() => {
+    if (!loaded || !road || !whyKey || why[whyKey]) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const response = await fetch("/api/explain", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ locationId: road.id, locationName: road.name }),
+        });
+        const data = (await response.json()) as {
+          sentence?: string;
+          readBy?: ReadBy;
+          aiNote?: string | null;
+        };
+        if (cancelled || !data.sentence) return;
+        setWhy((current) => ({ ...current, [whyKey]: data.sentence! }));
+        logDev("plain answer", data.readBy ?? "rules", data.aiNote);
+      } catch {
+        /* the built-in sentence stays */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [loaded, road, whyKey, why, logDev]);
+
+  const watched = useMemo(() => {
+    return locations
+      .map((location) => {
+        const b = calculateRoadBelief(location, reports, sources);
+        const latest = reports
+          .filter((report) => report.claim.locationId === location.id)
+          .map((report) => minutesSince(report.occurredAt))
+          .sort((a, b) => a - b)[0];
+        return { location, belief: b, latest: latest ?? Infinity };
+      })
+      .filter((item) => Number.isFinite(item.latest))
+      .sort((a, b) => a.latest - b.latest);
+  }, [locations, reports, sources]);
+
+  function goToRoad(location: { id: string; name: string }) {
+    router.push(`/road/${location.id}?name=${encodeURIComponent(location.name)}`);
+  }
+
+  function checkRoad() {
+    const name = query.trim();
+    if (!name) return;
+    const found = findLocation(name, locations);
+    goToRoad(found ?? { id: locationIdFromName(name), name });
+  }
+
+  function openShare() {
+    setError("");
+    setTurns([]);
+    setQuestion(null);
+    setAnswer("");
+    setPending(null);
+    setScreen("share");
+  }
+
+  async function analyze(nextTurns: Turn[]) {
     setBusy(true);
     setError("");
     try {
@@ -187,556 +238,635 @@ export function RoadCheckApp() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           rawText,
-          answer: withAnswer ? answer : undefined,
+          turns: nextTurns,
+          contextPlace: road?.name,
+          locations: road && !locations.some((l) => l.id === road.id)
+            ? [...locations, road]
+            : locations,
         }),
       });
-      const data = (await response.json()) as
-        | AnalysisResponse
-        | { error: string };
+      const data = (await response.json()) as AnalysisResponse | { error: string };
       if (!response.ok || "error" in data) {
-        setError("error" in data ? data.error : "The report could not be read.");
+        setError("error" in data ? data.error : "We couldn't read that. Try again.");
         return;
       }
-      setReadBy(data.readBy);
+      logDev("read report", data.readBy, data.aiNote);
       if (data.needsFollowUp) {
-        setFollowUp(data.question);
-        setPendingClaim(null);
-      } else {
-        setFollowUp(null);
-        setPendingClaim(data.claim);
-        setSelectedRoad(data.claim.roadId);
+        setQuestion(data.question);
+        setPending(null);
+        return;
       }
+      setQuestion(null);
+      setPending({ claim: data.claim, placeIsBusy: data.placeIsBusy });
     } catch {
-      setError("The report could not be read. Try again.");
+      setError("We couldn't reach RoadCheck. Check your connection and try again.");
     } finally {
       setBusy(false);
     }
   }
 
-  function addReport() {
-    if (!pendingClaim) return;
-    const sourceId = `src-${Date.now()}`;
-    const source: Source = {
-      id: sourceId,
-      name: pendingClaim.reportedBy || "New reporter",
-      channel:
-        pendingClaim.epistemicStatus === "firsthand"
-          ? "eyewitness"
-          : "whatsapp",
-      alpha: 2,
-      beta: 2,
-    };
-    const report: Report = {
-      id: `r-${Date.now()}`,
+  function sendAnswer(skip = false) {
+    if (!question) return;
+    const next = [...turns, { question, answer: skip ? "" : answer.trim() }];
+    setTurns(next);
+    setAnswer("");
+    setQuestion(null);
+    void analyze(next);
+  }
+
+  async function publish() {
+    if (!pending) return;
+    if (handle.trim().length < 2) {
+      setError("Add a name or nickname so people know who posted it.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    const fullText = [
       rawText,
-      sourceId,
-      createdAt: "6:40 PM",
-      claim: pendingClaim,
-      clusterId: assignCluster(pendingClaim, reports),
-      status: "open",
-    };
-    setSources((current) => [...current, source]);
-    setReports((current) => [...current, report]);
-    setPendingClaim(null);
-    setFollowUp(null);
-    setAnswer("");
-    setRawText("");
-    setTab("monitor");
+      ...turns.filter((t) => t.answer).map((t) => `${t.question} ${t.answer}`),
+    ].join("\n");
+    try {
+      const response = await fetch("/api/reports", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          rawText: fullText,
+          handle: handle.trim(),
+          claim: pending.claim,
+          placeIsBusy: pending.placeIsBusy,
+        }),
+      });
+      if (!response.ok) {
+        const data = (await response.json().catch(() => ({}))) as { error?: string };
+        setError(data.error ?? "That didn't post. Try again.");
+        return;
+      }
+      const target = { id: pending.claim.locationId, name: pending.claim.locationName };
+      setRawText("");
+      setTurns([]);
+      setPending(null);
+      await refresh();
+      if (road?.id === target.id) setScreen("road");
+      else goToRoad(target);
+    } catch {
+      setError("That didn't post. Check your connection and try again.");
+    } finally {
+      setBusy(false);
+    }
   }
 
-  function resolveReport(reportId: string, outcome: "confirmed" | "refuted") {
-    const report = reports.find((item) => item.id === reportId);
-    if (!report) return;
-    setReports((current) =>
-      current.map((item) =>
-        item.id === reportId ? { ...item, status: outcome } : item,
-      ),
-    );
-    setSources((current) =>
-      current.map((source) =>
-        source.id === report.sourceId
-          ? updateSourceOutcome(source, outcome)
-          : source,
-      ),
-    );
+  async function vote(reportId: string, outcome: "confirmed" | "refuted") {
+    setVoted((current) => ({ ...current, [reportId]: true }));
+    await fetch("/api/reports", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reportId, outcome }),
+    });
+    await refresh();
   }
 
-  function resetDemo() {
-    setReports(initialReports);
-    setSources(initialSources);
-    setSelectedRoad("market-road");
-    setRawText(demoReports[0].value);
-    setFollowUp(null);
-    setPendingClaim(null);
-    setAnswer("");
-    setTab("monitor");
+  async function shareRoad() {
+    if (!road || !belief) return;
+    const url = window.location.href;
+    const text = `${road.name}: ${verdictLook[belief.verdict].headline}. ${why[whyKey] ?? belief.explanation}`;
+    if (navigator.share) {
+      try {
+        await navigator.share({ title: `RoadCheck — ${road.name}`, text, url });
+        return;
+      } catch {
+        /* fall through to copy */
+      }
+    }
+    await navigator.clipboard.writeText(`${text}\n${url}`);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
   }
+
+  const look = belief ? verdictLook[belief.verdict] : null;
+  const latestMinutes = roadReports.length
+    ? minutesSince(roadReports[0].occurredAt)
+    : null;
 
   return (
-    <div className="min-h-screen bg-[var(--dusk)] text-[var(--ink)]">
-      <header className="border-b border-white/10">
-        <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-4 sm:px-6">
-          <div>
-            <p className="text-xs font-bold tracking-[0.22em] text-[#e7c9a0]">
-              ROADCHECK
-            </p>
-            <p className="mt-0.5 text-xs text-[#b9aa9a]">
-              Kasuwa · 6:40 PM · demo evening
-            </p>
-          </div>
+    <div className="mx-auto flex min-h-dvh max-w-md flex-col px-5 pb-8 pt-6">
+      <header className="mb-8 flex items-center justify-between">
+        <button
+          type="button"
+          onClick={() => (initialRoadId ? router.push("/") : setScreen("home"))}
+          className="text-lg font-semibold tracking-tight"
+        >
+          RoadCheck
+        </button>
+        {screen !== "share" && (
           <button
-            onClick={resetDemo}
-            className="rounded-full border border-white/15 px-3 py-1.5 text-xs font-semibold text-[#e6dbcc] hover:bg-white/5"
+            type="button"
+            onClick={openShare}
+            className="rounded-full border border-[var(--line)] bg-[var(--card)] px-3 py-1.5 text-sm font-medium"
           >
-            Reset demo
+            Report something
           </button>
-        </div>
+        )}
       </header>
 
-      <main className="mx-auto max-w-6xl px-4 py-5 sm:px-6 sm:py-7">
-        <div className="mb-5 max-w-3xl text-[var(--paper)]">
-          <h1
-            className="text-3xl leading-tight sm:text-4xl"
-            style={{ fontFamily: "var(--font-serif)" }}
-          >
-            Which road can Amara trust?
-          </h1>
-          <p className="mt-2 max-w-2xl text-sm leading-6 text-[#cbbdad]">
-            Raw reports become claims. Related forwards stay one chain. A
-            transparent belief model decides; AI reads and asks, but never
-            overrides the evidence.
-          </p>
-        </div>
-
-        <nav className="mb-4 flex gap-1 rounded-2xl bg-black/15 p-1 sm:w-fit">
-          {(
-            [
-              ["monitor", "Road monitor"],
-              ["report", "Add a report"],
-              ["sources", "Source ledger"],
-            ] as Array<[Tab, string]>
-          ).map(([id, label]) => (
-            <button
-              key={id}
-              onClick={() => setTab(id)}
-              className={`rounded-xl px-3 py-2 text-xs font-semibold transition ${
-                tab === id
-                  ? "bg-[var(--paper)] text-[var(--ink)]"
-                  : "text-[#cabdad] hover:text-white"
-              }`}
+      <main className="flex-1">
+        {screen === "home" && (
+          <>
+            <h1 className="text-2xl font-bold leading-tight">
+              Is the road safe right now?
+            </h1>
+            <p className="mt-2 text-sm text-[var(--muted)]">
+              See what people nearby are reporting before you go.
+            </p>
+            <form
+              className="mt-6"
+              onSubmit={(event) => {
+                event.preventDefault();
+                checkRoad();
+              }}
             >
-              {label}
-            </button>
-          ))}
-        </nav>
-
-        {tab === "monitor" && (
-          <div className="grid gap-4 lg:grid-cols-[0.88fr_1.55fr]">
-            <section className="space-y-2">
-              {roads.map((road) => {
-                const belief = beliefs[road.id];
-                const style = verdictStyle[belief.verdict];
-                return (
-                  <button
-                    key={road.id}
-                    onClick={() => setSelectedRoad(road.id)}
-                    className={`flex w-full items-center gap-3 rounded-2xl border p-3 text-left transition ${
-                      selectedRoad === road.id
-                        ? "border-[#e7c9a0] bg-[var(--paper)] shadow-lg"
-                        : "border-white/10 bg-white/[.06] text-[var(--paper)] hover:bg-white/[.09]"
-                    }`}
-                  >
-                    <Gauge belief={belief} />
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center justify-between gap-2">
-                        <h2 className="font-semibold">{road.name}</h2>
-                        <span className={`text-xs font-bold ${style.text}`}>
-                          {belief.title}
-                        </span>
-                      </div>
-                      <p
-                        className={`mt-1 text-xs ${
-                          selectedRoad === road.id
-                            ? "text-[var(--muted)]"
-                            : "text-[#b9aa9a]"
-                        }`}
-                      >
-                        {road.detail}
-                      </p>
-                      <p
-                        className={`mt-2 text-[11px] ${
-                          selectedRoad === road.id
-                            ? "text-[var(--muted)]"
-                            : "text-[#b9aa9a]"
-                        }`}
-                      >
-                        {belief.independentChains} evidence chain
-                        {belief.independentChains === 1 ? "" : "s"}
-                      </p>
-                    </div>
-                  </button>
-                );
-              })}
+              <label className="sr-only" htmlFor="road">
+                Road or area
+              </label>
+              <input
+                id="road"
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="Road, junction or area"
+                className="w-full rounded-lg border border-[var(--line)] bg-[var(--card)] px-4 py-3.5 text-base shadow-sm outline-none focus:border-[var(--brand)]"
+                autoComplete="off"
+                list="known-roads"
+              />
+              <datalist id="known-roads">
+                {locations.map((location) => (
+                  <option key={location.id} value={location.name} />
+                ))}
+              </datalist>
               <button
-                onClick={() => setTab("report")}
-                className="w-full rounded-2xl border border-dashed border-white/20 p-4 text-sm font-semibold text-[#dfd2c2] hover:bg-white/5"
+                type="submit"
+                disabled={!query.trim()}
+                className="mt-3 w-full rounded-lg bg-[var(--brand)] py-3.5 text-base font-semibold text-white disabled:opacity-40"
               >
-                + Add what you heard
+                Check
               </button>
-            </section>
+            </form>
 
-            <section className="overflow-hidden rounded-[26px] bg-[var(--paper)] shadow-[0_20px_50px_rgba(0,0,0,.22)]">
-              <div
-                className={`border-b border-black/[.06] p-5 sm:p-6 ${verdictStyle[selected.verdict].wash}`}
-              >
-                <div className="flex flex-wrap items-start justify-between gap-4">
-                  <div>
-                    <p className="text-xs font-semibold tracking-[0.15em] text-[var(--muted)] uppercase">
-                      {roadName(selectedRoad)} · right now
-                    </p>
-                    <h2
-                      className={`mt-2 text-5xl leading-none ${verdictStyle[selected.verdict].text}`}
-                      style={{ fontFamily: "var(--font-serif)" }}
-                    >
-                      {selected.title}
-                    </h2>
-                  </div>
-                  <Gauge belief={selected} />
-                </div>
-                <p className="mt-4 max-w-2xl text-base leading-7">
-                  {selected.explanation}
+            <section className="mt-10">
+              <h2 className="text-sm font-semibold">Recently reported</h2>
+              {!loaded ? (
+                <p className="mt-3 text-sm text-[var(--muted)]">Loading…</p>
+              ) : watched.length === 0 ? (
+                <p className="mt-3 text-sm text-[var(--muted)]">
+                  Nothing reported yet. If you&apos;ve seen or heard something,
+                  share it so others can decide.
                 </p>
-                <p className="mt-2 text-xs text-[var(--muted)]">
-                  A probability is a calibrated belief, not a guarantee.
-                </p>
-              </div>
-
-              <div className="grid gap-5 p-5 sm:p-6 md:grid-cols-2">
-                <div>
-                  <h3 className="text-xs font-bold tracking-[0.15em] text-[var(--muted)] uppercase">
-                    Why the belief moved
-                  </h3>
-                  <ol className="mt-3 space-y-3">
-                    {selected.evidence.length === 0 && (
-                      <li className="text-sm text-[var(--muted)]">
-                        No reports on this road yet.
-                      </li>
-                    )}
-                    {selected.evidence.map((line) => (
-                      <li
-                        key={`${line.reportId}-${line.label}`}
-                        className="flex gap-3"
-                      >
-                        <span
-                          className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${
-                            line.effect > 0 ? "bg-[#a84037]" : "bg-[#237a58]"
-                          }`}
-                        />
-                        <div>
-                          <p className="text-sm font-semibold">{line.label}</p>
-                          <p className="mt-0.5 text-xs leading-5 text-[var(--muted)]">
-                            {line.detail}
-                          </p>
-                        </div>
-                      </li>
-                    ))}
-                  </ol>
-                </div>
-
-                <div>
-                  <h3 className="text-xs font-bold tracking-[0.15em] text-[var(--muted)] uppercase">
-                    Reports on this road
-                  </h3>
-                  <div className="mt-3 space-y-2">
-                    {selectedReports.length === 0 && (
-                      <p className="text-sm text-[var(--muted)]">
-                        No one has reported this road.
-                      </p>
-                    )}
-                    {selectedReports.map((report) => {
-                      const source = sources.find(
-                        (item) => item.id === report.sourceId,
-                      );
-                      return (
-                        <article
-                          key={report.id}
-                          className="rounded-2xl border border-[var(--line)] bg-white/60 p-3"
+              ) : (
+                <ul className="mt-3 divide-y divide-[var(--line)] rounded-lg border border-[var(--line)] bg-[var(--card)]">
+                  {watched.map(({ location, belief: b, latest }) => {
+                    const v = verdictLook[b.verdict];
+                    return (
+                      <li key={location.id}>
+                        <button
+                          type="button"
+                          className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left"
+                          onClick={() => goToRoad(location)}
                         >
-                          <div className="flex flex-wrap items-center gap-1.5">
-                            <Badge
-                              tone={
-                                report.claim.direction === "danger"
-                                  ? "danger"
-                                  : "safe"
-                              }
-                            >
-                              {eventLabel[report.claim.eventType]}
-                            </Badge>
-                            <Badge>{report.claim.epistemicStatus}</Badge>
-                            {report.status !== "open" && (
-                              <Badge
-                                tone={
-                                  report.status === "confirmed"
-                                    ? "safe"
-                                    : "danger"
-                                }
-                              >
-                                {report.status}
-                              </Badge>
-                            )}
-                          </div>
-                          <p className="mt-2 text-sm leading-5">
-                            {report.claim.description}
-                          </p>
-                          <p className="mt-1 text-xs text-[var(--muted)]">
-                            {source?.name} · {report.claim.minutesAgo} min ago ·{" "}
-                            {Math.round(report.claim.extractionConfidence * 100)}
-                            % extraction confidence
-                          </p>
-                          {report.status === "open" && (
-                            <div className="mt-2 flex gap-2">
-                              <button
-                                onClick={() =>
-                                  resolveReport(report.id, "confirmed")
-                                }
-                                className="text-xs font-semibold text-[#176346]"
-                              >
-                                Confirm true
-                              </button>
-                              <button
-                                onClick={() =>
-                                  resolveReport(report.id, "refuted")
-                                }
-                                className="text-xs font-semibold text-[#8d312c]"
-                              >
-                                Mark false
-                              </button>
-                            </div>
-                          )}
-                        </article>
-                      );
-                    })}
-                  </div>
-                </div>
-              </div>
+                          <span>
+                            <span className="block font-medium">{location.name}</span>
+                            <span className="text-xs text-[var(--muted)]">
+                              Last report {timeAgo(latest)}
+                            </span>
+                          </span>
+                          <span
+                            className="shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold"
+                            style={{ background: v.bg, color: v.color }}
+                          >
+                            {v.short}
+                          </span>
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
             </section>
-          </div>
+
+            <button
+              type="button"
+              onClick={() => setScreen("people")}
+              className="mt-8 block w-full text-center text-xs text-[var(--muted)] underline-offset-2 hover:underline"
+            >
+              Who&apos;s been reliable?
+            </button>
+          </>
         )}
 
-        {tab === "report" && (
-          <section className="mx-auto max-w-3xl rounded-[26px] bg-[var(--paper)] p-5 shadow-[0_20px_50px_rgba(0,0,0,.22)] sm:p-7">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <p className="text-xs font-bold tracking-[0.16em] text-[var(--muted)] uppercase">
-                  New report
-                </p>
-                <h2
-                  className="mt-1 text-3xl"
-                  style={{ fontFamily: "var(--font-serif)" }}
-                >
-                  Paste it as it reached you
-                </h2>
-              </div>
-              <Badge tone={readBy === "model" ? "safe" : "neutral"}>
-                {readBy === "model"
-                  ? "AI reader active"
-                  : readBy === "rules"
-                    ? "Transparent fallback reader"
-                    : "Waiting for report"}
-              </Badge>
+        {screen === "road" && !loaded && (
+          <p className="text-sm text-[var(--muted)]">Getting the latest reports…</p>
+        )}
+
+        {screen === "road" && loaded && road && belief && look && (
+          <>
+            <div
+              className="rounded-xl p-5"
+              style={{ background: look.bg }}
+            >
+              <p className="text-sm font-medium text-[var(--muted)]">{road.name}</p>
+              <h1
+                className="mt-1 text-3xl font-bold leading-tight"
+                style={{ color: look.color }}
+              >
+                {look.headline}
+              </h1>
+              <p className="mt-3 text-base leading-relaxed">
+                {why[whyKey] ?? belief.explanation}
+              </p>
+              <p className="mt-3 text-xs text-[var(--muted)]">
+                {roadReports.length === 0
+                  ? "No reports yet"
+                  : `${roadReports.length} report${roadReports.length === 1 ? "" : "s"} · latest ${timeAgo(latestMinutes ?? 0)}`}
+                {" · updates live"}
+              </p>
             </div>
 
-            {!pendingClaim && (
+            <div className="mt-4 flex gap-2">
+              <button
+                type="button"
+                onClick={openShare}
+                className="flex-1 rounded-lg bg-[var(--brand)] py-3 text-sm font-semibold text-white"
+              >
+                I know something
+              </button>
+              <button
+                type="button"
+                onClick={() => void shareRoad()}
+                className="rounded-lg border border-[var(--line)] bg-[var(--card)] px-4 py-3 text-sm font-medium"
+              >
+                {copied ? "Copied" : "Send to someone"}
+              </button>
+            </div>
+
+            <section className="mt-8">
+              <h2 className="text-sm font-semibold">What people are saying</h2>
+              {roadReports.length === 0 ? (
+                <p className="mt-3 text-sm text-[var(--muted)]">
+                  No one has reported anything here yet. If you&apos;ve just
+                  come from {road.name}, tell others what it&apos;s like.
+                </p>
+              ) : (
+                <ul className="mt-3 space-y-3">
+                  {roadReports.map((report) => {
+                    const source = sources.find((item) => item.id === report.sourceId);
+                    const record = source
+                      ? { right: source.alpha - 2, wrong: source.beta - 2 }
+                      : null;
+                    return (
+                      <li
+                        key={report.id}
+                        className="rounded-lg border border-[var(--line)] bg-[var(--card)] p-4 text-sm"
+                      >
+                        <div className="flex items-center justify-between gap-2 text-xs text-[var(--muted)]">
+                          <span className="font-medium text-[var(--ink)]">
+                            {source?.name ?? "Someone"}
+                          </span>
+                          <span>{timeAgo(minutesSince(report.occurredAt))}</span>
+                        </div>
+                        <p className="mt-2 leading-relaxed">
+                          {report.claim.whatWasSeen || report.claim.description}
+                        </p>
+                        <p className="mt-2 text-xs text-[var(--muted)]">
+                          {howTheyKnow[report.claim.epistemicStatus]}
+                          {record && (record.right > 0 || record.wrong > 0)
+                            ? ` · right ${record.right}×, wrong ${record.wrong}× before`
+                            : ""}
+                        </p>
+                        {report.status === "open" && !voted[report.id] && (
+                          <div className="mt-3 flex gap-4 text-xs font-medium">
+                            <button
+                              type="button"
+                              className="text-[var(--ok)]"
+                              onClick={() => void vote(report.id, "confirmed")}
+                            >
+                              I can confirm this
+                            </button>
+                            <button
+                              type="button"
+                              className="text-[var(--bad)]"
+                              onClick={() => void vote(report.id, "refuted")}
+                            >
+                              This isn&apos;t true
+                            </button>
+                          </div>
+                        )}
+                        {report.status !== "open" && (
+                          <p
+                            className="mt-3 text-xs font-medium"
+                            style={{
+                              color:
+                                report.status === "confirmed" ? "var(--ok)" : "var(--bad)",
+                            }}
+                          >
+                            {report.status === "confirmed"
+                              ? "Confirmed by someone else"
+                              : "Someone said this wasn't true"}
+                          </p>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </section>
+
+            {belief.evidence.length > 0 && (
+              <details className="mt-6 rounded-lg border border-[var(--line)] bg-[var(--card)] p-4 text-sm">
+                <summary className="cursor-pointer font-semibold">
+                  How we decided
+                </summary>
+                <ul className="mt-3 space-y-2 text-[var(--muted)]">
+                  {belief.evidence.map((line) => (
+                    <li key={`${line.reportId}-${line.kind}`} className="flex gap-2">
+                      <span aria-hidden style={{ color: line.effect > 0 ? "var(--bad)" : "var(--ok)" }}>
+                        {line.effect > 0 ? "▲" : "▼"}
+                      </span>
+                      <span>{line.plain}</span>
+                    </li>
+                  ))}
+                </ul>
+                <p className="mt-3 text-xs text-[var(--muted)]">
+                  People who saw it themselves count more than forwards. Older
+                  reports count less. The same story passed around counts once.
+                </p>
+              </details>
+            )}
+
+            <p className="mt-6 text-center text-xs text-[var(--muted)]">
+              This is what people are reporting, not a guarantee. Stay alert.
+            </p>
+          </>
+        )}
+
+        {screen === "share" && (
+          <>
+            <button
+              type="button"
+              onClick={() => setScreen(initialRoadId ? "road" : "home")}
+              className="mb-4 text-sm text-[var(--brand)]"
+            >
+              ← Back
+            </button>
+            <h1 className="text-2xl font-bold">What did you see or hear?</h1>
+            <p className="mt-1 text-sm text-[var(--muted)]">
+              Write it the way you&apos;d tell a friend, or paste the message you
+              got. Say where, and whether you saw it yourself.
+            </p>
+
+            {!pending && turns.length === 0 && !question && (
               <>
                 <textarea
                   value={rawText}
-                  onChange={(event) => {
-                    setRawText(event.target.value);
-                    setFollowUp(null);
-                    setAnswer("");
-                  }}
-                  rows={7}
-                  className="mt-5 w-full resize-y rounded-2xl border border-[var(--line)] bg-white p-4 text-base leading-7 outline-none focus:border-[#8a5a12]"
-                  placeholder="Example: My cousin sent a voice note saying…"
+                  onChange={(event) => setRawText(event.target.value)}
+                  rows={5}
+                  className="mt-5 w-full resize-y rounded-lg border border-[var(--line)] bg-[var(--card)] p-4 text-base leading-relaxed"
+                  placeholder={
+                    road
+                      ? `e.g. Just passed ${road.name}, everything calm.`
+                      : "e.g. I just passed the market junction, men with guns near the filling station."
+                  }
+                  autoFocus
                 />
-                <div className="mt-3 flex flex-wrap gap-2">
-                  {demoReports.map((sample) => (
-                    <button
-                      key={sample.label}
-                      type="button"
-                      onClick={() => {
-                        setRawText(sample.value);
-                        setFollowUp(null);
-                        setAnswer("");
-                      }}
-                      className="rounded-full border border-[var(--line)] bg-white px-3 py-1.5 text-xs font-semibold text-[var(--muted)]"
-                    >
-                      {sample.label}
-                    </button>
-                  ))}
-                </div>
-
-                {followUp ? (
-                  <div className="mt-5 rounded-2xl bg-[#f5ead0] p-4">
-                    <p className="text-xs font-bold tracking-wide text-[#7a5015] uppercase">
-                      One thing is missing
-                    </p>
-                    <p className="mt-1 font-semibold">{followUp}</p>
-                    <input
-                      value={answer}
-                      onChange={(event) => setAnswer(event.target.value)}
-                      className="mt-3 w-full rounded-xl border border-[#dcc99d] bg-white px-3 py-2.5 text-sm outline-none"
-                      placeholder="Type the reporter's answer"
-                    />
-                    <button
-                      onClick={() => void analyze(true)}
-                      disabled={busy || answer.trim().length < 2}
-                      className="mt-3 rounded-full bg-[var(--dusk)] px-4 py-2 text-xs font-bold text-[var(--paper)] disabled:opacity-50"
-                    >
-                      {busy ? "Reading…" : "Use this answer"}
-                    </button>
-                  </div>
-                ) : (
-                  <button
-                    onClick={() => void analyze(false)}
-                    disabled={busy || rawText.trim().length < 8}
-                    className="mt-5 w-full rounded-full bg-[var(--dusk)] px-5 py-3 text-sm font-bold text-[var(--paper)] disabled:opacity-50"
-                  >
-                    {busy ? "Reading the report…" : "Read this report"}
-                  </button>
-                )}
+                <button
+                  type="button"
+                  disabled={busy || rawText.trim().length < 8}
+                  onClick={() => void analyze([])}
+                  className="mt-3 w-full rounded-lg bg-[var(--brand)] py-3.5 font-semibold text-white disabled:opacity-40"
+                >
+                  {busy ? "Reading…" : "Next"}
+                </button>
               </>
             )}
 
-            {pendingClaim && (
-              <div className="mt-5 rounded-3xl border border-[var(--line)] bg-white p-5">
-                <div className="flex flex-wrap gap-2">
-                  <Badge
-                    tone={
-                      pendingClaim.direction === "danger" ? "danger" : "safe"
-                    }
-                  >
-                    {pendingClaim.direction}
-                  </Badge>
-                  <Badge>{pendingClaim.epistemicStatus}</Badge>
-                  <Badge tone="warn">{pendingClaim.severity} severity</Badge>
-                </div>
-                <h3 className="mt-4 text-xl font-semibold">
-                  {pendingClaim.description}
-                </h3>
-                <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
+            {(turns.length > 0 || question) && (
+              <div className="mt-5 space-y-3">
+                <p className="rounded-lg bg-[var(--card)] p-3 text-sm ring-1 ring-[var(--line)]">
+                  {rawText}
+                </p>
+                {turns.map((turn, index) => (
+                  <div key={index} className="space-y-2">
+                    <p className="mr-10 rounded-lg bg-[var(--wait-bg)] p-3 text-sm">
+                      {turn.question}
+                    </p>
+                    <p className="ml-10 rounded-lg bg-[var(--card)] p-3 text-sm ring-1 ring-[var(--line)]">
+                      {turn.answer || <span className="text-[var(--muted)]">Not sure</span>}
+                    </p>
+                  </div>
+                ))}
+                {question && (
+                  <div className="space-y-2">
+                    <p className="mr-10 rounded-lg bg-[var(--wait-bg)] p-3 text-sm font-medium">
+                      {question}
+                    </p>
+                    <form
+                      onSubmit={(event) => {
+                        event.preventDefault();
+                        if (answer.trim()) sendAnswer();
+                      }}
+                    >
+                      <input
+                        value={answer}
+                        onChange={(event) => setAnswer(event.target.value)}
+                        className="w-full rounded-lg border border-[var(--line)] bg-[var(--card)] px-4 py-3 text-base"
+                        placeholder="Your answer"
+                        autoFocus
+                      />
+                      <div className="mt-2 flex gap-2">
+                        <button
+                          type="submit"
+                          disabled={busy || !answer.trim()}
+                          className="flex-1 rounded-lg bg-[var(--brand)] py-3 text-sm font-semibold text-white disabled:opacity-40"
+                        >
+                          Answer
+                        </button>
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() => sendAnswer(true)}
+                          className="rounded-lg border border-[var(--line)] px-4 py-3 text-sm"
+                        >
+                          I don&apos;t know
+                        </button>
+                      </div>
+                    </form>
+                  </div>
+                )}
+                {busy && !question && (
+                  <p className="text-sm text-[var(--muted)]">Reading…</p>
+                )}
+              </div>
+            )}
+
+            {pending && (
+              <div className="mt-5 rounded-lg border border-[var(--line)] bg-[var(--card)] p-4">
+                <p className="text-sm text-[var(--muted)]">Here&apos;s what we&apos;ll post:</p>
+                <dl className="mt-3 space-y-2 text-sm">
                   <div>
-                    <dt className="text-xs font-semibold text-[var(--muted)]">
-                      Road
-                    </dt>
-                    <dd className="mt-1">{roadName(pendingClaim.roadId)}</dd>
+                    <dt className="text-xs text-[var(--muted)]">Where</dt>
+                    <dd className="font-medium">{pending.claim.locationName}</dd>
                   </div>
                   <div>
-                    <dt className="text-xs font-semibold text-[var(--muted)]">
-                      Reporter
-                    </dt>
-                    <dd className="mt-1">{pendingClaim.reportedBy}</dd>
+                    <dt className="text-xs text-[var(--muted)]">What</dt>
+                    <dd>{pending.claim.whatWasSeen || pending.claim.description}</dd>
                   </div>
                   <div>
-                    <dt className="text-xs font-semibold text-[var(--muted)]">
-                      Time
-                    </dt>
-                    <dd className="mt-1">
-                      {pendingClaim.minutesAgo} minutes ago
+                    <dt className="text-xs text-[var(--muted)]">When</dt>
+                    <dd>
+                      {pending.claim.timeReference ||
+                        timeAgo(pending.claim.minutesAgo)}
                     </dd>
                   </div>
                   <div>
-                    <dt className="text-xs font-semibold text-[var(--muted)]">
-                      Extraction confidence
-                    </dt>
-                    <dd className="mt-1">
-                      {percent(pendingClaim.extractionConfidence)}
+                    <dt className="text-xs text-[var(--muted)]">How you know</dt>
+                    <dd>
+                      {pending.claim.reporterRelationship ||
+                        howTheyKnow[pending.claim.epistemicStatus]}
                     </dd>
                   </div>
                 </dl>
-                <div className="mt-5 flex gap-2">
+
+                <label className="mt-4 block text-sm font-medium" htmlFor="handle">
+                  Your name or nickname
+                </label>
+                <input
+                  id="handle"
+                  value={handle}
+                  onChange={(event) => setHandle(event.target.value)}
+                  className="mt-1 w-full rounded-lg border border-[var(--line)] bg-white px-3 py-2.5 text-base"
+                  placeholder="Use the same one each time"
+                  autoComplete="nickname"
+                />
+                <p className="mt-1 text-xs text-[var(--muted)]">
+                  When your reports turn out right, people trust them more.
+                </p>
+
+                <div className="mt-4 flex gap-2">
                   <button
-                    onClick={addReport}
-                    className="rounded-full bg-[var(--dusk)] px-5 py-2.5 text-sm font-bold text-[var(--paper)]"
+                    type="button"
+                    disabled={busy}
+                    onClick={() => void publish()}
+                    className="flex-1 rounded-lg bg-[var(--brand)] py-3 font-semibold text-white disabled:opacity-40"
                   >
-                    Add to the road signal
+                    {busy ? "Posting…" : "Post it"}
                   </button>
                   <button
-                    onClick={() => setPendingClaim(null)}
-                    className="rounded-full border border-[var(--line)] px-4 py-2.5 text-sm font-semibold"
+                    type="button"
+                    onClick={() => {
+                      setPending(null);
+                      setTurns([]);
+                      setQuestion(null);
+                    }}
+                    className="rounded-lg border border-[var(--line)] px-4 py-3 text-sm"
                   >
                     Edit
                   </button>
                 </div>
               </div>
             )}
-            {error && <p className="mt-3 text-sm text-[var(--stay)]">{error}</p>}
-          </section>
+
+            {error && <p className="mt-4 text-sm text-[var(--bad)]">{error}</p>}
+          </>
         )}
 
-        {tab === "sources" && (
-          <section className="rounded-[26px] bg-[var(--paper)] p-5 shadow-[0_20px_50px_rgba(0,0,0,.22)] sm:p-7">
-            <div className="max-w-2xl">
-              <p className="text-xs font-bold tracking-[0.16em] text-[var(--muted)] uppercase">
-                Source reliability ledger
-              </p>
-              <h2
-                className="mt-1 text-3xl"
-                style={{ fontFamily: "var(--font-serif)" }}
-              >
-                Trust is earned from outcomes
-              </h2>
-              <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
-                New sources start in the middle. Confirmed reports improve their
-                record; refuted reports reduce it. Identity can remain
-                pseudonymous.
-              </p>
-            </div>
-            <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              {sources.map((source) => {
-                const reliability = sourceReliability(source);
-                const count = reports.filter(
-                  (report) => report.sourceId === source.id,
-                ).length;
-                return (
-                  <article
-                    key={source.id}
-                    className="rounded-2xl border border-[var(--line)] bg-white/60 p-4"
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <h3 className="font-semibold">{source.name}</h3>
-                        <p className="mt-1 text-xs text-[var(--muted)]">
-                          {source.channel} · {count} report{count === 1 ? "" : "s"}
+        {screen === "people" && (
+          <>
+            <button
+              type="button"
+              onClick={() => setScreen("home")}
+              className="mb-4 text-sm text-[var(--brand)]"
+            >
+              ← Back
+            </button>
+            <h1 className="text-2xl font-bold">Who&apos;s been reliable?</h1>
+            <p className="mt-2 text-sm text-[var(--muted)]">
+              When others confirm or deny a report, the person who posted it
+              gets a track record. Reports from people who are usually right
+              count for more.
+            </p>
+            {sources.length === 0 ? (
+              <p className="mt-8 text-sm text-[var(--muted)]">No one has posted yet.</p>
+            ) : (
+              <ul className="mt-6 space-y-3">
+                {[...sources]
+                  .sort((a, b) => b.alpha - b.beta - (a.alpha - a.beta))
+                  .map((source) => {
+                    const count = reports.filter((r) => r.sourceId === source.id).length;
+                    const right = source.alpha - 2;
+                    const wrong = source.beta - 2;
+                    return (
+                      <li
+                        key={source.id}
+                        className="flex items-center justify-between rounded-lg border border-[var(--line)] bg-[var(--card)] px-4 py-3"
+                      >
+                        <div>
+                          <p className="font-medium">{source.name}</p>
+                          <p className="text-xs text-[var(--muted)]">
+                            {count} report{count === 1 ? "" : "s"}
+                          </p>
+                        </div>
+                        <p className="text-right text-xs text-[var(--muted)]">
+                          {right === 0 && wrong === 0
+                            ? "New — no track record yet"
+                            : `Right ${right}× · Wrong ${wrong}×`}
                         </p>
-                      </div>
-                      <span className="text-xl font-bold">
-                        {percent(reliability)}
-                      </span>
-                    </div>
-                    <div className="mt-4 h-2 overflow-hidden rounded-full bg-[#e9e0d4]">
-                      <div
-                        className="h-full rounded-full bg-[#6e806d]"
-                        style={{ width: percent(reliability) }}
-                      />
-                    </div>
-                    <p className="mt-2 text-xs text-[var(--muted)]">
-                      Beta({source.alpha}, {source.beta}) · updates only when a
-                      claim is confirmed or refuted
-                    </p>
-                  </article>
-                );
-              })}
-            </div>
-          </section>
+                      </li>
+                    );
+                  })}
+              </ul>
+            )}
+          </>
         )}
 
-        <p className="mt-4 max-w-3xl text-xs leading-5 text-[#a99b8c]">
-          Prototype with fictional roads and reports. RoadCheck supports a
-          decision; it does not guarantee safety or replace local emergency
-          channels.
-        </p>
+        {error && screen !== "share" && (
+          <p className="mt-4 text-sm text-[var(--bad)]">{error}</p>
+        )}
       </main>
+
+      {IS_DEV && <DevPanel log={devLog} />}
     </div>
+  );
+}
+
+/** Development-only view of which AI jobs ran. Never shown in production. */
+function DevPanel({ log }: { log: DevEvent[] }) {
+  const [status, setStatus] = useState<{
+    mode: string;
+    model: string;
+    probe?: { ok: boolean; error?: string };
+  } | null>(null);
+
+  useEffect(() => {
+    void fetch("/api/status")
+      .then((response) => response.json())
+      .then(setStatus)
+      .catch(() => {});
+  }, []);
+
+  return (
+    <details className="mt-10 rounded-lg border border-dashed border-[var(--line)] p-3 font-mono text-[11px] text-[var(--muted)]">
+      <summary className="cursor-pointer">
+        dev · AI {status?.probe?.ok ? `live (${status.model})` : `off — ${status?.probe?.error ?? "checking…"}`}
+      </summary>
+      <ul className="mt-2 space-y-1">
+        {log.length === 0 && <li>no AI calls yet</li>}
+        {log.map((event) => (
+          <li key={event.at + event.job}>
+            {new Date(event.at).toLocaleTimeString()} · {event.job} ·{" "}
+            <span style={{ color: event.readBy === "model" ? "var(--ok)" : "var(--bad)" }}>
+              {event.readBy}
+            </span>
+            {event.note ? ` · ${event.note}` : ""}
+          </li>
+        ))}
+      </ul>
+    </details>
   );
 }

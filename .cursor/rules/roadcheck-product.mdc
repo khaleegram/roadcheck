@@ -1,0 +1,36 @@
+---
+description: What RoadCheck is, how it must talk to users, and where internal model wording belongs
+alwaysApply: true
+---
+
+# RoadCheck — product intent (read before changing anything)
+
+RoadCheck is a real, live product for anyone, anywhere: a person about to travel checks a road and gets a trustworthy answer in seconds; a person who saw or heard something shares it. It is **not** a demo, hackathon showcase, explainer site, or "AI console". No seed data, canned examples, reset buttons, personas (no "Amara"), or judge-facing copy in the app.
+
+Starter data comes only from `npm run seed` (`lib/seed.ts`): ordinary reports filed through the real AI pipeline and stored like any user's report. Never hard-code sample data into pages or components. `npm run test:ai` runs the same messages in memory.
+
+Full design reference: `/home/Bagatata/Downloads/RoadCheck_Full_Documentation.md` (§4 belief model, §5 LLM roles). Its demo script (§8) and Streamlit/Claude stack (§7) do **not** apply.
+
+## LLM does language; math does trust
+
+- The belief engine (`lib/roadcheck.ts`) alone decides danger: log-odds, hearsay discount, time decay, chains, coordinated cold-start discount, absence of corroboration on busy places, contradiction collapse, Beta source ledger.
+- The model (`lib/ai.ts` + `lib/prompts.ts`) only: reads reports into structured claims, asks up to 3 dispatcher-style follow-up questions, judges whether two reports are the same event, tags places busy/quiet, and translates the engine's trace into plain words. It never picks the verdict.
+- Models: **open-weight only**, free via Groq (`llama-3.3-70b-versatile`, `llama-3.1-8b-instant`). Never Claude, GPT, Gemini, Grok, or the Vercel AI Gateway.
+- Every AI job has a keyword/template fallback so the app never breaks without a key.
+
+## Where wording goes
+
+| Wording | Lives in | Seen by |
+|---|---|---|
+| Model internals ("chain", "cold-start", "absence penalty", "log-odds", percentages) | `EvidenceLine.label` / `.detail`, `evidenceNotes()`, `lib/prompts.ts`, docs | the model and developers only |
+| Plain language | `EvidenceLine.plain`, `fallbackExplanation()`, UI strings, model output | users |
+| AI health / which reader ran | `/api/status`, `readBy`/`aiNote` on API responses, dev-only `DevPanel` (`NODE_ENV=development`) | developers only |
+
+Never render `label`, `detail`, `readBy`, `aiNote`, model names, probabilities, or setup instructions in the product UI.
+
+## User voice (UI copy and model output)
+
+- Calm, well-informed neighbour. Short sentences. No jargon, no mention of AI/math/scores/system.
+- Say who said it in human terms ("someone who was there", "a forwarded message"), how recent, and whether others backed it up.
+- Honest about uncertainty without drama. A next step only when the verdict calls for it.
+- Keep the simple mobile layout: home (check + recently reported) → road page (`/road/[id]`, shareable) → report flow with follow-up chat → people's track record.

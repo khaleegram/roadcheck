@@ -1,128 +1,113 @@
 # RoadCheck
 
-AI-assisted, trust-calibrated road safety signals for communities facing too
-much noise and too little verified information.
+Check whether a road is safe right now, and tell others what you've seen.
 
-Amara is closing her shop at 6:40 PM. A cousin's voice note says something is
-happening on the road, a neighbour saw movement, and the vigilante radio cannot
-reach everyone. She does not need a weekly report. She needs a calm answer now,
-and she needs to understand why she should trust it.
+Reports arrive the way they do in real life — forwards, voice-note
+transcripts, "my cousin said", someone who just passed through — in English
+or Pidgin. RoadCheck reads them, asks the reporter the one question that
+matters most, and gives anyone checking that road a calm, plain answer with
+the reasons behind it.
 
-RoadCheck turns raw reports into a live belief for each road. It deliberately
-keeps the language model out of the trust decision:
+**The language model reads and explains; a transparent belief model decides.**
+The model never picks whether a road is safe.
 
-> **AI reads language. Transparent math decides trust.**
+**Live:** LIVE_URL
 
-## What the prototype does
+## Setup
 
-- Accepts a raw text report or voice-note transcript.
-- Uses AI to extract road, event, time, severity, source distance
-  (firsthand/secondhand/thirdhand), and extraction uncertainty.
-- Asks one targeted follow-up when the report is missing a critical fact.
-- Groups copied or related messages into one evidence chain so five forwards
-  do not become five witnesses.
-- Maintains a Bayesian-style danger belief for each road using source
-  reliability, hearsay depth, severity, recency, and diminishing returns.
-- Treats missing expected corroboration on a busy road as negative evidence.
-- Lets a recent credible firsthand contradiction pull an old warning down
-  quickly.
-- Lets an operator confirm or refute reports, updating the source's Beta
-  reliability ledger.
-- Shows Amara a plain verdict and the evidence that moved it.
-
-The seeded fictional evening demonstrates three roads:
-
-- **Market Road:** two WhatsApp forwards are one chain; Fatima's independent
-  sighting is another.
-- **River Path:** a community patrol reports a direct all-clear.
-- **Hill Cut:** no report means uncertainty, not proof that it is safe.
-
-## How the belief works
-
-Each road stores log-odds of danger. A report contributes:
-
-```text
-event strength
-× firsthand/hearsay weight
-× source reliability
-× severity
-× time decay
-× within-cluster independence discount
-```
-
-Danger claims add to the log-odds; direct clear reports subtract. Related
-reports receive harmonic diminishing returns. A credible direct pass that
-happened after a warning triggers an asymmetric collapse rather than behaving
-like one ordinary negative vote.
-
-The numbers in this screening prototype are explicit demo parameters, not
-field-calibrated safety guarantees.
-
-## Run locally
-
-Requires Node.js 22 or later.
+Requires Node.js 22+.
 
 ```bash
 npm install
+cp .env.example .env.local   # paste CEREBRAS_API_KEY or GROQ_API_KEY
+npm run seed                 # optional: starter reports on six roads
 npm run dev
 ```
 
 Open [http://localhost:3000](http://localhost:3000).
 
-Run the trust-engine checks and production build:
+Without a key everything still works using a keyword reader and template
+answers; with one, open-weight models (Qwen on Cerebras, or Llama on Groq)
+do the reading and writing.
+
+## Using it
+
+- **Check** — type a road or area. Each place has its own shareable page
+  (`/road/<place>`) that updates live.
+- **Report something** — write it like you'd tell a friend. RoadCheck may ask
+  up to three short follow-up questions (where exactly, did you see it
+  yourself, how long ago, what exactly), shows what it understood, then posts.
+- **I can confirm this / This isn't true** — builds each poster's track record,
+  so reliable people count for more over time.
+
+## Starter reports
+
+`npm run seed` replaces the store with twelve reports from twelve people across
+six roads, each filed through the real AI pipeline (reading, follow-up
+questions, same-event check):
+
+- **Kaduna-Zaria Junction** — a vague rumour (RoadCheck asks follow-ups), then
+  someone who was there saw the same thing, then a trusted patrol drove through
+  and found it clear → *Probably fine*
+- **Kachia Road** — a bus driver, a passer-by and the local vigilance group all
+  see kidnappers blocking the road within minutes → *Don't go that way*
+- **Kawo Bridge** — a barricade seen firsthand, plus a neighbour's call → *Be careful*
+- **Ahmadu Bello Way** — one 40-minute-old secondhand warning at a busy spot,
+  nobody else mentions it → stays low
+- **Central Market Road** — two new accounts post the same panic forward →
+  counted once as suspicious
+- **Kurmin Mashi farm road** — firsthand sighting at a quiet place
+
+Times are relative to when the seed runs, and reports fade over about 30
+minutes — run it again right before showing the app. `npm run test:ai` files
+the same messages in memory and checks each road's outcome.
+
+## What the model does (and doesn't)
+
+| Job | Who does it |
+|---|---|
+| Read a report into place, time, what was seen, how they know | Open-weight model → keyword fallback |
+| Ask follow-up questions like a dispatcher | Open-weight model → keyword fallback |
+| Decide if two reports are the same event | Open-weight model → word-overlap fallback |
+| Tag a new place as busy or quiet | Open-weight model → keyword fallback |
+| Plain-language answer on the road page | Open-weight model → template fallback, guarded so it can't contradict the verdict |
+| Danger level, hearsay discount, time decay, rumour chains, coordinated-account discount, silence on busy roads, contradiction collapse, track records | Belief engine in `lib/roadcheck.ts` — never the model |
+
+The model is `qwen-3.8-27b` on Cerebras when `CEREBRAS_API_KEY` is set,
+otherwise Llama 3.3 70B / 3.1 8B on Groq. Only open-weight models are used;
+Claude, GPT, Gemini and Grok are refused even if configured. Details: [docs/FEATURES.md](docs/FEATURES.md).
+
+## Developer checks
 
 ```bash
-npm run test:engine
+npm run test:engine   # belief model + no jargon reaches users
+npm run test:ai       # starter reports through the real model, in memory only
 npm run lint
 npm run build
+npm run ai:status     # with dev running: which model, is it answering
 ```
 
-## AI configuration
+In development a small dashed panel at the bottom of the page shows which AI
+jobs ran and whether they used the model or the fallback. It never appears in
+production.
 
-The app uses the Vercel AI SDK and AI Gateway. On Vercel, OIDC supplies the
-gateway identity. Locally, link the project and pull its environment:
+## Deploying
 
-```bash
-npx vercel link
-npx vercel env pull
-```
+Any Node host with a persistent disk works (it's deployed on Railway):
 
-`ROADCHECK_MODEL` optionally changes the model (default:
-`openai/gpt-5.4-mini`). `ROADCHECK_REHEARSAL=1` forces the transparent local
-reader.
+- Build `npm run build`, start `npm run start`.
+- Mount a volume and set `ROADCHECK_DATA_DIR` to it.
+- Set `CEREBRAS_API_KEY` (or `GROQ_API_KEY`).
+- `ROADCHECK_SEED_ON_START=1` files the starter reports when the store is empty.
+- With `SEED_TOKEN` set, refresh them any time:
+  `curl -X POST -H "Authorization: Bearer $SEED_TOKEN" https://<host>/api/seed`
 
-If the gateway is unavailable, the prototype remains usable through a visible,
-deterministic extraction fallback. The UI labels which reader handled the
-report. The belief calculation is identical in both cases.
+## Limitations
 
-## Architecture
-
-```text
-raw report
-  → AI extraction + one clarifying question
-  → structured claim
-  → related-report clustering
-  → source reliability ledger
-  → transparent road belief engine
-  → verdict + evidence trace
-```
-
-- `app/api/analyze/route.ts` — structured AI extraction and fallback reader
-- `lib/roadcheck.ts` — clustering, source reputation, and belief calculation
-- `components/roadcheck-app.tsx` — report intake, road monitor, verification,
-  and source ledger
-- `scripts/engine-check.ts` — executable checks for the critical trust rules
-
-The demo persists changes in the browser so a reviewer can confirm/refute
-reports and watch beliefs change without needing an account.
-
-## Limitations and next steps
-
-- The demo data is fictional and browser-local.
-- Production parameters need calibration against real, ethically collected
-  outcomes; a probability must never be presented as a safety guarantee.
-- Real deployment needs authenticated reporters, abuse controls, audit logs,
-  consent and retention policies, and human escalation.
-- Next: WhatsApp/SMS intake, speech-to-text for voice notes, geocoded road
-  segments, persistent storage, low-bandwidth SMS/USSD access, and community
-  governance for confirmation/refutation.
+- Reports are stored in one JSON file on the server. That's fine for one
+  instance; more traffic needs a database — next step.
+- No accounts: posters pick a nickname, so a track record can be impersonated.
+- Places are matched by name, not GPS.
+- Anyone can confirm or deny any report.
+- Free/trial model tiers have rate limits; heavy use falls back to the keyword reader.
+- A verdict is a best reading of what people report, not a guarantee.
