@@ -46,7 +46,7 @@ Extraction rules:
 - originHint: a short stable label for the original story if it is a forward/voice note ("voice note about armed men at the market"), else null.
 - severity: low | medium | high.
 - confidence: 0-1, how sure you are of YOUR reading. Lower it for vague place, vague time, or unclear source.
-- summary: one calm factual sentence describing the claim, in plain English, no advice.
+- summary: one calm factual sentence describing the claim, in plain English, no advice. No times ("4 minutes ago", "just now") — it is read again hours later.
 
 Follow-up rules (the most important part):
 - List what is still unclear in "unclear", ordered by how much it would change a safety decision: place precision > whether they saw it themselves > how recent > what exactly (how many, armed or not) > direction of movement.
@@ -94,10 +94,11 @@ const INTERNAL_WORDS =
   /\b(ai|model|llm|probability|percent|log-?odds|score|chains?|clusters?|ledger|cold-?start|corroborat\w*|epistemic|algorithm|system|verdict)\b|%/i;
 
 const OPPOSITE: Record<Verdict, RegExp> = {
-  "looks-clear": /\b(avoid|dangerous|don't go|do not go|stay away)\b/i,
-  unconfirmed: /\b(confirmed danger|definitely (?:safe|dangerous)|completely safe)\b/i,
-  caution: /\b(completely safe|nothing to worry|all clear)\b/i,
-  avoid: /\b(safe to go|all clear|nothing to worry|looks fine|probably fine)\b/i,
+  "looks-clear": /\b(avoid|dangerous|don['’]t go|do not go|stay away|nobody knows)\b/i,
+  unconfirmed:
+    /\b(avoid|don['’]t go|do not go|stay away|take another route|confirmed danger|definitely (?:safe|dangerous)|completely safe|probably fine|looks fine|all clear)\b/i,
+  caution: /\b(don['’]t go|do not go|completely safe|nothing to worry|all clear|probably fine|looks fine|nobody knows)\b/i,
+  avoid: /\b(safe to go|all clear|nothing to worry|looks fine|probably fine|nobody knows)\b/i,
 };
 
 /** Rejects model text that leaks internals or disagrees with the math. */

@@ -571,10 +571,14 @@ export function percent(value: number) {
   return `${Math.round(value * 100)}%`;
 }
 
+const FROZEN_TIME =
+  /,?\s*(?:reported\s+)?(?:about\s+|around\s+|like\s+)?(?:\d+\s*(?:minutes?|mins?|hours?|hrs?)\s+ago|just now|right now|a moment ago)/gi;
+
 /** Internal notes handed to the explanation model. */
 export function evidenceNotes(belief: RoadBelief) {
-  return belief.evidence.map(
-    (line) =>
-      `[${line.kind}] ${line.label} — ${line.detail} (${line.effect > 0 ? "raises" : "lowers"} danger)`,
-  );
+  return belief.evidence.map((line) => {
+    const label = line.label.replace(FROZEN_TIME, "").replace(/\s+\./g, ".").trim();
+    const when = line.minutesAgo != null ? ` [happened ${line.minutesAgo} min ago]` : "";
+    return `[${line.kind}] ${label} — ${line.detail}${when} (${line.effect > 0 ? "raises" : "lowers"} danger)`;
+  });
 }
