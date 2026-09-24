@@ -49,5 +49,10 @@ export function withStore<T>(fn: (store: Store) => Promise<T> | T) {
 }
 
 export async function getStore() {
-  return withStore(async (store) => structuredClone(store));
+  const run = queue.then(readStore);
+  queue = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  return run;
 }
