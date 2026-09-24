@@ -12,7 +12,7 @@ import {
   type Report,
   type Source,
 } from "@/lib/roadcheck";
-import { withStore, type Store } from "@/lib/store";
+import { getStore, withStore, type Store } from "@/lib/store";
 
 /**
  * Starter reports, filed through the same AI pipeline a real reporter goes
@@ -213,6 +213,35 @@ export async function buildSeed(now = Date.now()): Promise<{ store: Store; log: 
     store: { locations, reports, sources: SOURCES.map((source) => ({ ...source })) },
     log,
   };
+}
+
+const STARTER_SOURCE_IDS = new Set(SOURCES.map((source) => source.id));
+const STARTER_STALE_MS = 20 * 60_000;
+
+/**
+ * With ROADCHECK_KEEP_STARTER_FRESH=1, moves the starter reports forward in time
+ * (keeping their spacing) once they are 20 minutes old, so a hosted copy never
+ * goes quiet between visits. Reports from anyone else are never touched.
+ */
+export async function keepStarterReportsCurrent(now = Date.now()) {
+  if (process.env.ROADCHECK_KEEP_STARTER_FRESH !== "1") return;
+  const newestOf = (reports: Report[]) =>
+    Math.max(
+      ...reports
+        .filter((report) => STARTER_SOURCE_IDS.has(report.sourceId))
+        .map((report) => Date.parse(report.createdAt)),
+    );
+  const newest = newestOf((await getStore()).reports);
+  if (!Number.isFinite(newest) || now - newest < STARTER_STALE_MS) return;
+  await withStore((store) => {
+    const shift = now - 60_000 - newestOf(store.reports);
+    if (!(shift > 0)) return;
+    for (const report of store.reports) {
+      if (!STARTER_SOURCE_IDS.has(report.sourceId)) continue;
+      report.createdAt = new Date(Date.parse(report.createdAt) + shift).toISOString();
+      report.occurredAt = new Date(Date.parse(report.occurredAt) + shift).toISOString();
+    }
+  });
 }
 
 /** Replaces everything in the store with freshly filed starter reports. */

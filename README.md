@@ -61,7 +61,10 @@ questions, same-event check):
 - **Kurmin Mashi farm road** — firsthand sighting at a quiet place
 
 Times are relative to when the seed runs, and reports fade over about 30
-minutes — run it again right before showing the app. `npm run test:ai` files
+minutes. On the hosted copy `ROADCHECK_KEEP_STARTER_FRESH=1` moves only these
+starter reports forward (keeping their spacing) whenever they're 20 minutes
+old, so the app never goes quiet between visits; reports anyone else files
+are left alone. `npm run test:ai` files
 the same messages in memory and checks each road's outcome.
 
 ## What the model does (and doesn't)
@@ -101,6 +104,7 @@ Any Node host with a persistent disk works (it's deployed on Railway):
 - Mount a volume and set `ROADCHECK_DATA_DIR` to it.
 - Set `CEREBRAS_API_KEY` (or `GROQ_API_KEY`).
 - `ROADCHECK_SEED_ON_START=1` files the starter reports when the store is empty.
+- `ROADCHECK_KEEP_STARTER_FRESH=1` keeps those starter reports recent.
 - With `SEED_TOKEN` set, refresh them any time:
   `curl -X POST -H "Authorization: Bearer $SEED_TOKEN" https://<host>/api/seed`
 
