@@ -11,7 +11,7 @@ the reasons behind it.
 **The language model reads and explains; a transparent belief model decides.**
 The model never picks whether a road is safe.
 
-**Live:** LIVE_URL
+**Live:** [roadcheck-production.up.railway.app](https://roadcheck-production.up.railway.app)
 
 ## Setup
 
