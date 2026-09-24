@@ -12,6 +12,7 @@ the reasons behind it.
 The model never picks whether a road is safe.
 
 **Live:** [roadcheck-production.up.railway.app](https://roadcheck-production.up.railway.app)
+
 **Walkthrough (2 min):** [Loom video](https://www.loom.com/share/48a7339e2df74685bae39c694b8e4915)
 
 ## Setup
